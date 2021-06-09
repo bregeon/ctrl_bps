@@ -66,8 +66,12 @@ class LocalService(BaseWmsService):
                                                              f"{self.__class__.__name__}")
         # workflow.write(out_prefix)
         _LOG.info("Prepared a local workflow")
-        for job in local_workflow.local_jobs:
-            _LOG.info("Job: %s"%job.name)
+        local_workflow.local_jobs.sort()
+        # for job_name in local_workflow.local_jobs:
+        #     _LOG.info("Job: %s" % job_name)
+        for job_name,deps in local_workflow.local_deps.items():
+            _LOG.info("Job: %s" % job_name)
+            _LOG.info("\t deps: %s" % deps)
         return local_workflow
 
     def submit(self, workflow):
@@ -126,7 +130,7 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
             for gwf_file in generic_workflow.get_job_outputs(gwf_job.name, data=True, transfer_only=True):
                  gwf_job_outputs.append(local_workflow.local_files[gwf_file.name])
             # store in members
-            local_workflow.local_jobs.append(gwf_job)
+            local_workflow.local_jobs.append(gwf_job.name)
             local_workflow.local_jobs_input_files[job_name] = gwf_job_inputs
             local_workflow.local_jobs_output_files[job_name] = gwf_job_outputs
 
