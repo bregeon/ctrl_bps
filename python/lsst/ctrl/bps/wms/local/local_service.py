@@ -61,14 +61,14 @@ class LocalService(BaseWmsService):
             Local workflow ready to be run.
         """
         _LOG.debug("out_prefix = '%s'", out_prefix)
-        workflow = LocalBpsWmsWorkflow.from_generic_workflow(config, generic_workflow, out_prefix,
+        local_workflow = LocalBpsWmsWorkflow.from_generic_workflow(config, generic_workflow, out_prefix,
                                                              f"{self.__class__.__module__}."
                                                              f"{self.__class__.__name__}")
         # workflow.write(out_prefix)
         _LOG.info("Prepared a local workflow")
-        for job in self.local_jobs:
+        for job in local_workflow.local_jobs:
             _LOG.info("Job: %s"%job.name)
-        return workflow
+        return local_workflow
 
     def submit(self, workflow):
         """Submit a simple workflow locally
@@ -105,37 +105,37 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
         local_workflow.run_attrs['bps_wms_workflow'] = f"{cls.__module__}.{cls.__name__}"
 
         # Create initial Pegasus File objects for *all* files that WMS must handle
-        self.local_files = dict()
+        local_workflow.local_files = dict()
         for gwf_file in generic_workflow.get_files(data=True, transfer_only=True):
             if gwf_file.wms_transfer:
                 pfn = f"file://{gwf_file.src_uri}"
-                self.local_files[gwf_file.name] = pfn
+                local_workflow.local_files[gwf_file.name] = pfn
 
         # Add jobs to the list of local jobs, and associate input and output files
-        self.local_jobs = list()
-        self.local_jobs_input_files = dict()
-        self.local_jobs_output_files = dict()
+        local_workflow.local_jobs = list()
+        local_workflow.local_jobs_input_files = dict()
+        local_workflow.local_jobs_output_files = dict()
         for job_name in generic_workflow:
             gwf_job = generic_workflow.get_job(job_name)
             # input files as pfn
             gwf_job_inputs = list()
             for gwf_file in generic_workflow.get_job_inputs(gwf_job.name, data=True, transfer_only=True):
-                 gwf_job_inputs.append(self.local_files[gwf_file.name])
+                 gwf_job_inputs.append(local_workflow.local_files[gwf_file.name])
             # output files as pfn
             gwf_job_outputs = list()
             for gwf_file in generic_workflow.get_job_outputs(gwf_job.name, data=True, transfer_only=True):
-                 gwf_job_outputs.append(self.local_files[gwf_file.name])
+                 gwf_job_outputs.append(local_workflow.local_files[gwf_file.name])
             # store in members
-            self.local_jobs.append(gwf_job)
-            self.local_jobs_input_files[job_name] = gwf_job_inputs
-            self.local_jobs_output_files[job_name] = gwf_job_outputs
+            local_workflow.local_jobs.append(gwf_job)
+            local_workflow.local_jobs_input_files[job_name] = gwf_job_inputs
+            local_workflow.local_jobs_output_files[job_name] = gwf_job_outputs
 
         # Add job dependencies to the DAX.
-        self.local_deps = dict()
+        local_workflow.local_deps = dict()
         for job_name in generic_workflow:
             childs = list()
             for child_name in generic_workflow.successors(job_name):
                 childs.append(child_name)
-            self.local_deps[job_name] = childs
+            local_workflow.local_deps[job_name] = childs
         _LOG.debug("Local dag attribs %s", local_workflow.run_attrs)
         return local_workflow
