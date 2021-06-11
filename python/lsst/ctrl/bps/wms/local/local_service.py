@@ -65,13 +65,20 @@ class LocalService(BaseWmsService):
                                                              f"{self.__class__.__module__}."
                                                              f"{self.__class__.__name__}")
         # workflow.write(out_prefix)
+        _LOG.info(60*"-")
         _LOG.info("Prepared a local workflow")
-        local_workflow.local_jobs.sort()
-        # for job_name in local_workflow.local_jobs:
-        #     _LOG.info("Job: %s" % job_name)
-        for job_name,deps in local_workflow.local_deps.items():
+        for id in local_workflow.local_job_ids:
+            _LOG.info("Job %d is %s" % (id, local_workflow.local_jobs[id]))
+
+        _LOG.info(60*"-")
+        for id in local_workflow.local_job_ids:
+            job_name = local_workflow.local_jobs[id]
+            preds = local_workflow.local_predecessors[job_name]
+            succs = local_workflow.local_successors[job_name]
             _LOG.info("Job: %s" % job_name)
-            _LOG.info("\t deps: %s" % deps)
+            _LOG.info("\t predecessors: %s" % preds)
+            _LOG.info("\t successors: %s" % succs)
+
         return local_workflow
 
     def submit(self, workflow):
@@ -116,7 +123,7 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
                 local_workflow.local_files[gwf_file.name] = pfn
 
         # Add jobs to the list of local jobs, and associate input and output files
-        local_workflow.local_jobs = list()
+        local_workflow.local_jobs = dict()
         local_workflow.local_jobs_input_files = dict()
         local_workflow.local_jobs_output_files = dict()
         for job_name in generic_workflow:
@@ -130,16 +137,31 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
             for gwf_file in generic_workflow.get_job_outputs(gwf_job.name, data=True, transfer_only=True):
                  gwf_job_outputs.append(local_workflow.local_files[gwf_file.name])
             # store in members
-            local_workflow.local_jobs.append(gwf_job.name)
+            try:
+                job_id = int(gwf_job.name.split('_')[0])
+            except:
+                job_id = 0
+            local_workflow.local_jobs[job_id] = gwf_job.name
             local_workflow.local_jobs_input_files[job_name] = gwf_job_inputs
             local_workflow.local_jobs_output_files[job_name] = gwf_job_outputs
 
+        # Ordered list of job ids
+        job_ids = list(local_workflow.local_jobs.keys())
+        job_ids.sort()
+        local_workflow.local_job_ids = job_ids
+
         # Add job dependencies to the DAX.
-        local_workflow.local_deps = dict()
+        local_workflow.local_predecessors = dict()
+        local_workflow.local_successors = dict()
         for job_name in generic_workflow:
             childs = list()
+            parents = list()
+            for parent_name in generic_workflow.predecessors(job_name):
+                parents.append(parent_name)
             for child_name in generic_workflow.successors(job_name):
                 childs.append(child_name)
-            local_workflow.local_deps[job_name] = childs
+            local_workflow.local_predecessors[job_name] = parents
+            local_workflow.local_successors[job_name] = childs
+
         _LOG.debug("Local dag attribs %s", local_workflow.run_attrs)
         return local_workflow
