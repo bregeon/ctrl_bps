@@ -67,17 +67,17 @@ class LocalService(BaseWmsService):
         # workflow.write(out_prefix)
         _LOG.info(60*"-")
         _LOG.info("Prepared a local workflow")
-        for id in local_workflow.local_job_ids:
-            _LOG.info("Job %d is %s" % (id, local_workflow.local_jobs[id]))
+        for job_id in local_workflow.local_job_ids:
+            _LOG.info("Job %d is %s", job_id, local_workflow.local_jobs[job_id])
 
         _LOG.info(60*"-")
-        for id in local_workflow.local_job_ids:
-            job_name = local_workflow.local_jobs[id]
+        for job_id in local_workflow.local_job_ids:
+            job_name = local_workflow.local_jobs[job_id]
             preds = local_workflow.local_predecessors[job_name]
             succs = local_workflow.local_successors[job_name]
-            _LOG.info("Job: %s" % job_name)
-            _LOG.info("\t predecessors: %s" % preds)
-            _LOG.info("\t successors: %s" % succs)
+            _LOG.info("Job: %s", job_name)
+            _LOG.info("\t predecessors: %s", preds)
+            _LOG.info("\t successors: %s", succs)
 
         return local_workflow
 
@@ -89,7 +89,7 @@ class LocalService(BaseWmsService):
         workflow : `~lsst.ctrl.bps.wms_service.BaseWorkflow`
             A single basic workflow to submit
         """
-        _LOG.debug("Submitting %s" % workflow)
+        _LOG.debug("Submitting %s", workflow)
 
 
 class LocalBpsWmsWorkflow(BaseWmsWorkflow):
@@ -131,11 +131,11 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
             # input files as pfn
             gwf_job_inputs = list()
             for gwf_file in generic_workflow.get_job_inputs(gwf_job.name, data=True, transfer_only=True):
-                 gwf_job_inputs.append(local_workflow.local_files[gwf_file.name])
+                gwf_job_inputs.append(local_workflow.local_files[gwf_file.name])
             # output files as pfn
             gwf_job_outputs = list()
             for gwf_file in generic_workflow.get_job_outputs(gwf_job.name, data=True, transfer_only=True):
-                 gwf_job_outputs.append(local_workflow.local_files[gwf_file.name])
+                gwf_job_outputs.append(local_workflow.local_files[gwf_file.name])
             # store in members
             try:
                 job_id = int(gwf_job.name.split('_')[0])
