@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+echo "Cleaning environment $CLEANED_ENV"
+[ -z "$CLEANED_ENV" ] && exec /bin/env -i CLEANED_ENV="Done" HOME=${HOME} SHELL=/bin/bash /bin/bash -l "$0" "$@"
+
 # setup lsst distrib
 RUBIN_VER="20"
 source /cvmfs/sw.lsst.eu/linux-x86_64/lsst_distrib/w_2021_${RUBIN_VER}/loadLSST.bash
