@@ -24,8 +24,9 @@
 
 import os
 import copy
+import time
 import logging
-import binascii
+import subprocess
 
 from lsst.ctrl.bps.wms_service import BaseWmsWorkflow, BaseWmsService
 # from lsst.ctrl.bps.wms.Local.idds_tasks import IDDSWorkflowGenerator
@@ -67,15 +68,20 @@ class LocalService(BaseWmsService):
         # workflow.write(out_prefix)
         _LOG.info(60*"-")
         _LOG.info("Prepared a local workflow")
-        for job_id in local_workflow.local_job_ids:
-            _LOG.info("Job %d is %s", job_id, local_workflow.local_jobs[job_id])
+        for job_id in local_workflow.local_job_ids[:10]:
+            _LOG.info("Job %d is %s \n %s", job_id, local_workflow.local_jobs[job_id][0],
+                                                    local_workflow.local_jobs[job_id][1])
 
         _LOG.info(60*"-")
-        for job_id in local_workflow.local_job_ids:
-            job_name = local_workflow.local_jobs[job_id]
+        for job_id in local_workflow.local_job_ids[:10]:
+            job_name = local_workflow.local_jobs[job_id][0]
+            inputs = local_workflow.local_jobs_input_files[job_name]
+            outputs = local_workflow.local_jobs_output_files[job_name]
             preds = local_workflow.local_predecessors[job_name]
             succs = local_workflow.local_successors[job_name]
             _LOG.info("Job: %s", job_name)
+            _LOG.info("\t inputs: %s", inputs)
+            _LOG.info("\t outputs: %s", inputs)
             _LOG.info("\t predecessors: %s", preds)
             _LOG.info("\t successors: %s", succs)
 
@@ -89,7 +95,50 @@ class LocalService(BaseWmsService):
         workflow : `~lsst.ctrl.bps.wms_service.BaseWorkflow`
             A single basic workflow to submit
         """
-        _LOG.debug("Submitting %s", workflow)
+        _LOG.info("Submitting %s", workflow)
+        for job_id in workflow.local_job_ids:
+            job_name = workflow.local_jobs[job_id][0]
+            job_cmd = workflow.local_jobs[job_id][1]
+            _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
+            for one_input in workflow.local_jobs_input_files[job_name]:
+                copy_inputs_cmd = "cp -f %s ." % one_input.strip("file:")[2:]
+                _LOG.info("CMD %s", copy_inputs_cmd)
+                with subprocess.Popen([copy_inputs_cmd], stdout=subprocess.PIPE,
+                                      shell=True) as proc:
+                    _LOG.info(proc.stdout.read())
+            with subprocess.Popen([job_cmd], stdout=subprocess.PIPE, shell=True) as proc:
+                _LOG.info(proc.stdout.read())
+
+        # jobs_queue = copy.copy(workflow.local_job_ids)
+        # running_jobs = list()
+        # while len(jobs_queue)>0:
+        #     for job_id in jobs_queue:
+        #         job_name = workflow.local_jobs[job_id][0]
+        #         # check predecessors as well
+        #         if inputs_ready[job_name] and n_threads<4:
+        #             local_id = submit_job[job_name]
+        #             running_jobs.append((job_id, local_id))
+        #             n_threads = n_threads + 1
+        #     # update status
+        #     for jobs in running_jobs:
+        #         status = get_job_status(jobs[1])
+        #         if status is "Done":
+        #             running_jobs.remove(jobs)
+        #             jobs_queue.remove(jobs[0])
+        #     time.sleep(10)
+
+
+    def dump_cmdline_wrapper(self, cmdline):
+        """Create a local job wrapper
+
+        Parameters
+        ----------
+        cmdline : string
+            Command line from generic_worklow job
+        """
+        _LOG.info("Preparing command wrapper)
+        template = open(os.environ['CTRL_BPS_DIR']+'/python/lsst/ctrl/bps/wms/local/launcher_template.sh').read()
+
 
 
 class LocalBpsWmsWorkflow(BaseWmsWorkflow):
@@ -141,7 +190,7 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
                 job_id = int(gwf_job.name.split('_')[0])
             except:
                 job_id = 0
-            local_workflow.local_jobs[job_id] = gwf_job.name
+            local_workflow.local_jobs[job_id] = (gwf_job.name, gwf_job.cmdline)
             local_workflow.local_jobs_input_files[job_name] = gwf_job_inputs
             local_workflow.local_jobs_output_files[job_name] = gwf_job_outputs
 
