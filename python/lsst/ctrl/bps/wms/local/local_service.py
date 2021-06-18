@@ -96,17 +96,27 @@ class LocalService(BaseWmsService):
             A single basic workflow to submit
         """
         _LOG.info("Submitting %s", workflow)
-        for job_id in workflow.local_job_ids:
+        for job_id in workflow.local_job_ids[:10]:
             job_name = workflow.local_jobs[job_id][0]
             job_cmd = workflow.local_jobs[job_id][1]
             _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
+            inputs_list_str = ""
             for one_input in workflow.local_jobs_input_files[job_name]:
+                inputs_list_str = inputs_list_str + "%s " % one_input.strip("file:")[2:]
                 copy_inputs_cmd = "cp -f %s ." % one_input.strip("file:")[2:]
                 _LOG.info("CMD %s", copy_inputs_cmd)
                 with subprocess.Popen([copy_inputs_cmd], stdout=subprocess.PIPE,
                                       shell=True) as proc:
                     _LOG.info(proc.stdout.read())
-            with subprocess.Popen([job_cmd], stdout=subprocess.PIPE, shell=True) as proc:
+            # prepare pipe wrapper
+            pipe_wrapper = self.prepare_cmdline_wrapper(job_id, job_cmd)
+            _LOG.info("\tRunning wrapper %s", pipe_wrapper)
+            # with subprocess.Popen(['./'+pipe_wrapper], stdout=subprocess.PIPE, shell=True) as proc:
+            #     _LOG.info(proc.stdout.read())
+            launch_job_cmd = './dirac_launcher.sh '+pipe_wrapper+' "%s" '%inputs_list_str.strip(' ')
+            _LOG.info(launch_job_cmd)
+            with subprocess.Popen([launch_job_cmd],
+                                  stdout=subprocess.PIPE, shell=True) as proc:
                 _LOG.info(proc.stdout.read())
 
         # jobs_queue = copy.copy(workflow.local_job_ids)
@@ -127,8 +137,7 @@ class LocalService(BaseWmsService):
         #             jobs_queue.remove(jobs[0])
         #     time.sleep(10)
 
-
-    def dump_cmdline_wrapper(self, cmdline):
+    def prepare_cmdline_wrapper(self, job_id, cmdline):
         """Create a local job wrapper
 
         Parameters
@@ -136,10 +145,42 @@ class LocalService(BaseWmsService):
         cmdline : string
             Command line from generic_worklow job
         """
-        _LOG.info("Preparing command wrapper)
-        template = open(os.environ['CTRL_BPS_DIR']+'/python/lsst/ctrl/bps/wms/local/launcher_template.sh').read()
+        _LOG.info("Preparing command wrapper")
+        template = open(os.environ['CTRL_BPS_DIR'] + '/python/lsst/ctrl/bps/wms/local/pipetask_wrapper.sh').read()
+        content = template.replace('PIPE_TASK_CMDLINE', '"%s"' % cmdline)
+        wrapper_name = 'pipetask_wrapper_%d.sh' % job_id
+        open(wrapper_name, 'w').write(content)
+        # make it executable
+        os.chmod(wrapper_name, 0o755)
+        return wrapper_name
 
 
+    # def have_outputs(self, job_name):
+    #     """
+    #     Use the repo butler to determine if a job's outputs are present.
+    #     If any outputs are missing, return False.
+    #     """
+    #     butler = Butler(self.config['butlerConfig'],
+    #                     run=self.config['outCollection'])
+    #     registry = butler.registry
+    #     for node in self.qgraph_nodes:
+    #         for dataset_refs in node.quantum.outputs.values():
+    #             for dataset_ref in dataset_refs:
+    #                 ref = registry.findDataset(dataset_ref.datasetType,
+    #                                            dataset_ref.dataId,
+    #                                            collections=butler.run)
+    #                 if ref is None:
+    #                     return False
+    #     return True
+    #
+    # @property
+    # def qgraph_nodes(self, job_name):
+    #     """Return the list of nodes from the underlying QuantumGraph."""
+    #     if self.gwf_job.quantum_graph is not None:
+    #         return self.gwf_job.quantum_graph
+    #     qgraph = self.parent_graph.qgraph
+    #     return [qgraph.getQuantumNodeByNodeId(_)
+    #             for _ in self.gwf_job.qgraph_node_ids]
 
 class LocalBpsWmsWorkflow(BaseWmsWorkflow):
     """
