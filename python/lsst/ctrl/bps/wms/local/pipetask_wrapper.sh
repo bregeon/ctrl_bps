@@ -20,7 +20,7 @@ setup -j -r .
 cd -
 
 # run command line
-cmdline=$1
+cmdline=PIPE_TASK_CMDLINE
 echo $cmdline
 eval $cmdline
 
