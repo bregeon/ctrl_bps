@@ -141,7 +141,7 @@ class LocalService(BaseWmsService):
             Command line from generic_worklow job
         """
         _LOG.info("Preparing command wrapper")
-        template = open(os.environ['CTRL_BPS_DIR'] + '/python/lsst/ctrl/bps/wms/local/pipetask_wrapper.sh').read()
+        template = open(os.environ['CTRL_BPS_DIR'] + '/python/lsst/ctrl/bps/templates/pipetask_wrapper.sh').read()
         content = template.replace('PIPE_TASK_CMDLINE', '"%s"' % cmdline)
         wrapper_name = 'pipetask_wrapper_%d.sh' % job_id
         open(wrapper_name, 'w').write(content)
