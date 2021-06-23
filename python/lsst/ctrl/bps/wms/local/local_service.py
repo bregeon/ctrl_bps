@@ -111,12 +111,7 @@ class LocalService(BaseWmsService):
             # prepare pipe wrapper
             pipe_wrapper = self.prepare_cmdline_wrapper(job_id, job_cmd)
             _LOG.info("\tRunning wrapper %s", pipe_wrapper)
-            # with subprocess.Popen(['./'+pipe_wrapper], stdout=subprocess.PIPE, shell=True) as proc:
-            #     _LOG.info(proc.stdout.read())
-            launch_job_cmd = './dirac_launcher.sh '+pipe_wrapper+' "%s" '%inputs_list_str.strip(' ')
-            _LOG.info(launch_job_cmd)
-            with subprocess.Popen([launch_job_cmd],
-                                  stdout=subprocess.PIPE, shell=True) as proc:
+            with subprocess.Popen(['./'+pipe_wrapper], stdout=subprocess.PIPE, shell=True) as proc:
                 _LOG.info(proc.stdout.read())
 
         # jobs_queue = copy.copy(workflow.local_job_ids)
