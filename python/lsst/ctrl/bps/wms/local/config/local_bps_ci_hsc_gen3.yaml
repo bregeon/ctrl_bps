@@ -1,0 +1,31 @@
+pipelineYaml: "${CI_HSC_GEN3_DIR}/pipelines/DRP.yaml"
+templateDataId: "{tract}_{patch}_{band}_{visit}_{exposure}_{detector}"
+project: dev
+campaign: quick
+submitPath: ${PWD}/submit/{outCollection}
+computeSite: mylaptop
+requestMemory: 8192
+requestCpus: 1
+
+site:
+  mylaptop:
+    profile:
+      local:
+        requirements: "none"
+
+payload:
+  runInit: true
+  payloadName: ci_hsc
+  butlerConfig: ${CI_HSC_GEN3_DIR}/DATA/butler.yaml
+  inCollection: HSC/defaults
+  outCollection: "u/${USER}/ci_hsc_gen3/{timestamp}"
+  dataQuery: skymap='discrete/ci_hsc' AND tract=0 AND patch=69 AND NOT (visit=903342 AND detector=100) AND NOT (visit=904010 AND detector=100)
+
+pipetask:
+  pipetaskInit:
+    runQuantumCommand: "${CTRL_MPEXEC_DIR}/bin/pipetask --long-log run -b {butlerConfig} -i {inCollection} --output-run {outCollection} --init-only --skip-existing --register-dataset-types --qgraph {qgraphFile} --clobber-partial-outputs --no-versions"
+
+wmsServiceClass: lsst.ctrl.bps.wms.local.local_service.LocalService
+clusterAlgorithm: lsst.ctrl.bps.quantum_clustering_funcs.single_quantum_clustering
+createQuantumGraph: '${CTRL_MPEXEC_DIR}/bin/pipetask qgraph -d "{dataQuery}" -b {butlerConfig} -i {inCollection} -p {pipelineYaml} -c makeWarp:connections.photoCalibName=jointcal -c makeWarp:useGlobalExternalPhotoCalib=False -q {qgraphFile} --qgraph-dot {qgraphFile}.dot'
+runQuantumCommand: "${CTRL_MPEXEC_DIR}/bin/pipetask --long-log run -b {butlerConfig} -i {inCollection} --output-run {outCollection} --extend-run --skip-init-writes --qgraph {qgraphFile} --clobber-partial-outputs --no-versions"
