@@ -29,13 +29,8 @@ import logging
 import subprocess
 
 from lsst.ctrl.bps.wms_service import BaseWmsWorkflow, BaseWmsService
-# from lsst.ctrl.bps.wms.Local.idds_tasks import IDDSWorkflowGenerator
-from lsst.daf.butler import ButlerURI
-# from idds.workflow.workflow import Workflow as IDDS_client_workflow
-# from idds.doma.workflow.domalsstwork import DomaLSSTWork
-# import idds.common.constants as idds_constants
-# import idds.common.utils as idds_utils
-# import PanDAtools.idds_api
+from lsst.daf.butler import Butler, DimensionUniverse, ButlerURI
+from lsst.pipe.base.graph import QuantumGraph
 
 _LOG = logging.getLogger(__name__)
 
@@ -81,7 +76,7 @@ class LocalService(BaseWmsService):
             succs = local_workflow.local_successors[job_name]
             _LOG.info("Job: %s", job_name)
             _LOG.info("\t inputs: %s", inputs)
-            _LOG.info("\t outputs: %s", inputs)
+            _LOG.info("\t outputs: %s", outputs)
             _LOG.info("\t predecessors: %s", preds)
             _LOG.info("\t successors: %s", succs)
 
@@ -150,33 +145,6 @@ class LocalService(BaseWmsService):
         return wrapper_name
 
 
-    # def have_outputs(self, job_name):
-    #     """
-    #     Use the repo butler to determine if a job's outputs are present.
-    #     If any outputs are missing, return False.
-    #     """
-    #     butler = Butler(self.config['butlerConfig'],
-    #                     run=self.config['outCollection'])
-    #     registry = butler.registry
-    #     for node in self.qgraph_nodes:
-    #         for dataset_refs in node.quantum.outputs.values():
-    #             for dataset_ref in dataset_refs:
-    #                 ref = registry.findDataset(dataset_ref.datasetType,
-    #                                            dataset_ref.dataId,
-    #                                            collections=butler.run)
-    #                 if ref is None:
-    #                     return False
-    #     return True
-    #
-    # @property
-    # def qgraph_nodes(self, job_name):
-    #     """Return the list of nodes from the underlying QuantumGraph."""
-    #     if self.gwf_job.quantum_graph is not None:
-    #         return self.gwf_job.quantum_graph
-    #     qgraph = self.parent_graph.qgraph
-    #     return [qgraph.getQuantumNodeByNodeId(_)
-    #             for _ in self.gwf_job.qgraph_node_ids]
-
 class LocalBpsWmsWorkflow(BaseWmsWorkflow):
     """
     A single Local based workflow
@@ -200,12 +168,14 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
         local_workflow.run_attrs['bps_wms_service'] = service_class
         local_workflow.run_attrs['bps_wms_workflow'] = f"{cls.__module__}.{cls.__name__}"
 
-        # Create initial Pegasus File objects for *all* files that WMS must handle
+        # Create initial list of file objects for *all* files that WMS must handle
         local_workflow.local_files = dict()
         for gwf_file in generic_workflow.get_files(data=True, transfer_only=True):
             if gwf_file.wms_transfer:
                 pfn = f"file://{gwf_file.src_uri}"
                 local_workflow.local_files[gwf_file.name] = pfn
+        _LOG.info("Generated tasks")
+        _LOG.info(local_workflow.generated_tasks)
 
         # Add jobs to the list of local jobs, and associate input and output files
         local_workflow.local_jobs = dict()
@@ -219,8 +189,50 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
                 gwf_job_inputs.append(local_workflow.local_files[gwf_file.name])
             # output files as pfn
             gwf_job_outputs = list()
-            for gwf_file in generic_workflow.get_job_outputs(gwf_job.name, data=True, transfer_only=True):
+            for gwf_file in generic_workflow.get_job_outputs(gwf_job.name, data=True, transfer_only=False):
                 gwf_job_outputs.append(local_workflow.local_files[gwf_file.name])
+            # input data
+            _LOG.info(60 * "-")
+            butler = Butler(config['butlerConfig'], run=config['outCollection'])
+            registry = butler.registry
+            # load quantum graph
+            gwf_job.quantum_graph = QuantumGraph.loadUri(gwf_job_inputs[0], DimensionUniverse())
+            qgraph = gwf_job.quantum_graph
+            _LOG.info('%s %s %s', gwf_job.name, qgraph.allDatasetTypes, gwf_job.qgraph_node_ids)
+            _LOG.info(' --- INPUTS ---')
+            for node in qgraph.inputQuanta:
+                for dataset_refs in node.quantum.inputs.values():
+                    _LOG.info('%s %s', node, dataset_refs)
+                    for dataset_ref in dataset_refs:
+                        _LOG.info('Type = %s', dataset_ref.datasetType)
+                        _LOG.info('ID = %s', dataset_ref.dataId)
+                        ref = registry.findDataset(dataset_ref.datasetType,
+                                                   dataset_ref.dataId,
+                                                   collections=butler.run)
+                        _LOG.info('Butler = %s', ref)
+
+            # _LOG.info(' --- OUTPUTS ---')
+            # for node in qgraph.outputQuanta:
+            #     for dataset_refs in node.quantum.outputs.values():
+            #         _LOG.info('%s %s', node, dataset_refs)
+
+            # nodes = list()
+            # if gwf_job.qgraph_node_ids is not None:
+            #     for id in gwf_job.qgraph_node_ids:
+            #         qgraph = gwf_job.quantum_graph
+            #         if qgraph is not None:
+            #             #nodes.append(qgraph.getQuantumNodeByNodeId(id))
+            #
+            # butler = Butler(config['butlerConfig'], run=config['outCollection'])
+            # registry = butler.registry
+            # for node in nodes:
+            #     for dataset_refs in node.quantum.outputs.values():
+            #         for dataset_ref in dataset_refs:
+            #             ref = registry.findDataset(dataset_ref.datasetType,
+            #                                        dataset_ref.dataId,
+            #                                        collections=butler.run)
+            #             _LOG.info(ref)
+
             # store in members
             try:
                 job_id = int(gwf_job.name.split('_')[0])
@@ -235,7 +247,7 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
         job_ids.sort()
         local_workflow.local_job_ids = job_ids
 
-        # Add job dependencies to the DAX.
+        # Save job dependencies
         local_workflow.local_predecessors = dict()
         local_workflow.local_successors = dict()
         for job_name in generic_workflow:
@@ -247,6 +259,7 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
                 childs.append(child_name)
             local_workflow.local_predecessors[job_name] = parents
             local_workflow.local_successors[job_name] = childs
+
 
         _LOG.debug("Local dag attribs %s", local_workflow.run_attrs)
         return local_workflow
