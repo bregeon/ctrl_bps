@@ -253,3 +253,16 @@ class DiracBpsWmsWorkflow(BaseWmsWorkflow):
 
         _LOG.debug("Dirac dag attribs %s", dirac_workflow.run_attrs)
         return dirac_workflow
+
+
+class DiracJob(object):
+    """
+    A simple Dirac job definition
+    Parameters
+    ----------
+    name : `str`
+        Unique name for the job
+    """
+
+    def __init__(self, name):
+        self.name = name
