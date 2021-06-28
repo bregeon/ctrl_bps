@@ -82,7 +82,98 @@ class LocalService(BaseWmsService):
 
         return local_workflow
 
-    def submit(self, workflow):
+    def check_job_input(self, job):
+        """ Check input files for a given job in Butler
+
+        Parameters
+        ----------
+        job
+
+        """
+        pass
+
+    def check_wkf_inputs(self, workflow):
+        """ Check input files in Butler
+        Parameters
+        ----------
+        workflow : `~lsst.ctrl.bps.wms_service.BaseWorkflow`
+            A single basic workflow to submit
+        """
+        # input data
+        _LOG.info(60 * "-")
+        butler = Butler(self.config['butlerConfig'], run=self.config['HSC/defaults'])
+        registry = butler.registry
+        # load quantum graph from pipetask init
+        ptask_init_id = workflow.local_job_ids[0]
+        ptask_init_name = workflow.local_jobs[ptask_init_id][0]
+        qgraph_file = workflow.local_jobs_input_files[ptask_init_name][0]
+        quantum_graph = QuantumGraph.loadUri(qgraph_file, DimensionUniverse())
+        _LOG.info('%s %s %s', ptask_init_name, qgraph_file, quantum_graph)
+        _LOG.info(' --- INPUTS ---')
+        for node in quantum_graph.inputQuanta:
+            _LOG.info('--- Node = %s', node)
+            for dataset_refs in node.quantum.inputs.values():
+                _LOG.info('Dataset %s', dataset_refs)
+                for dataset_ref in dataset_refs:
+                    _LOG.info('Type = %s', dataset_ref.datasetType)
+                    _LOG.info('ID = %s', dataset_ref.dataId)
+                    #_LOG.info('Butler Run = %s', butler.run)
+                    ref = registry.findDataset(dataset_ref.datasetType,
+                                               dataset_ref.dataId,
+                                               collections=['HSC/defaults']) # butler.run
+                    if ref is not None:
+                        _LOG.info('Butler = %s', ref)
+                        uri = butler.getURI(ref, collections=['HSC/defaults'])
+                        _LOG.info("{}\n".format(uri))
+
+        # _LOG.info(' --- OUTPUTS ---')
+        # for node in quantum_graph.outputQuanta:
+        #     for dataset_refs in node.quantum.outputs.values():
+        #         _LOG.info('%s %s', node, dataset_refs)
+
+        # nodes = list()
+        # if gwf_job.qgraph_node_ids is not None:
+        #     for id in gwf_job.qgraph_node_ids:
+        #         qgraph = gwf_job.quantum_graph
+        #         if qgraph is not None:
+        #             #nodes.append(qgraph.getQuantumNodeByNodeId(id))
+        #
+        # butler = Butler(config['butlerConfig'], run=config['outCollection'])
+        # registry = butler.registry
+        # for node in nodes:
+        #     for dataset_refs in node.quantum.outputs.values():
+        #         for dataset_ref in dataset_refs:
+        #             ref = registry.findDataset(dataset_ref.datasetType,
+        #                                        dataset_ref.dataId,
+        #                                        collections=butler.run)
+        #             _LOG.info(ref)
+
+    def run_one_job(self, workflow, job_id, job_name, job_cmd):
+        """ Run one job locally
+
+        Parameters
+        ----------
+        workflow
+        job_id
+        job_name
+        job_cmd
+        """
+        _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
+        inputs_list_str = ""
+        for one_input in workflow.local_jobs_input_files[job_name]:
+            inputs_list_str = inputs_list_str + "%s " % one_input.strip("file:")[2:]
+            copy_inputs_cmd = "cp -f %s ." % one_input.strip("file:")[2:]
+            _LOG.info("CMD %s", copy_inputs_cmd)
+            with subprocess.Popen([copy_inputs_cmd], stdout=subprocess.PIPE,
+                                  shell=True) as proc:
+                _LOG.info(proc.stdout.read())
+        # prepare pipe wrapper
+        pipe_wrapper = self.prepare_cmdline_wrapper(job_id, job_cmd)
+        _LOG.info("\tRunning wrapper %s", pipe_wrapper)
+        with subprocess.Popen(['./' + pipe_wrapper], stdout=subprocess.PIPE, shell=True) as proc:
+            _LOG.info(proc.stdout.read())
+
+    def submit(self, workflow, check_inputs=True, dry_run=True):
         """Submit a simple workflow locally
 
         Parameters
@@ -90,24 +181,24 @@ class LocalService(BaseWmsService):
         workflow : `~lsst.ctrl.bps.wms_service.BaseWorkflow`
             A single basic workflow to submit
         """
-        _LOG.info("Submitting %s", workflow)
-        for job_id in workflow.local_job_ids[:10]:
-            job_name = workflow.local_jobs[job_id][0]
-            job_cmd = workflow.local_jobs[job_id][1]
-            _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
-            inputs_list_str = ""
-            for one_input in workflow.local_jobs_input_files[job_name]:
-                inputs_list_str = inputs_list_str + "%s " % one_input.strip("file:")[2:]
-                copy_inputs_cmd = "cp -f %s ." % one_input.strip("file:")[2:]
-                _LOG.info("CMD %s", copy_inputs_cmd)
-                with subprocess.Popen([copy_inputs_cmd], stdout=subprocess.PIPE,
-                                      shell=True) as proc:
-                    _LOG.info(proc.stdout.read())
-            # prepare pipe wrapper
-            pipe_wrapper = self.prepare_cmdline_wrapper(job_id, job_cmd)
-            _LOG.info("\tRunning wrapper %s", pipe_wrapper)
-            with subprocess.Popen(['./'+pipe_wrapper], stdout=subprocess.PIPE, shell=True) as proc:
-                _LOG.info(proc.stdout.read())
+        if check_inputs:
+            _LOG.info("Check inputs in butler, but first run pipetask init")
+            # run pipe task init
+            ptask_init_id = workflow.local_job_ids[0]
+            ptask_init_name = workflow.local_jobs[ptask_init_id][0]
+            ptask_init_cmd = workflow.local_jobs[ptask_init_id][1]
+            self.run_one_job(workflow, ptask_init_id, ptask_init_name, ptask_init_cmd)
+            # now check if input data are available
+            self.check_wkf_inputs(workflow)
+
+        if not dry_run:
+            _LOG.info("Submitting %s", workflow)
+            for job_id in workflow.local_job_ids[1:10]:
+                job_name = workflow.local_jobs[job_id][0]
+                job_cmd = workflow.local_jobs[job_id][1]
+                _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
+                # self.check_job_input(job_id, job_name)
+                self.run_one_job(workflow, job_id, job_name, job_cmd)
 
         # jobs_queue = copy.copy(workflow.local_job_ids)
         # running_jobs = list()
@@ -191,48 +282,6 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
             gwf_job_outputs = list()
             for gwf_file in generic_workflow.get_job_outputs(gwf_job.name, data=True, transfer_only=False):
                 gwf_job_outputs.append(local_workflow.local_files[gwf_file.name])
-            # input data
-            _LOG.info(60 * "-")
-            butler = Butler(config['butlerConfig'], run=config['outCollection'])
-            registry = butler.registry
-            # load quantum graph
-            gwf_job.quantum_graph = QuantumGraph.loadUri(gwf_job_inputs[0], DimensionUniverse())
-            qgraph = gwf_job.quantum_graph
-            _LOG.info('%s %s %s', gwf_job.name, qgraph.allDatasetTypes, gwf_job.qgraph_node_ids)
-            _LOG.info(' --- INPUTS ---')
-            for node in qgraph.inputQuanta:
-                for dataset_refs in node.quantum.inputs.values():
-                    _LOG.info('%s %s', node, dataset_refs)
-                    for dataset_ref in dataset_refs:
-                        _LOG.info('Type = %s', dataset_ref.datasetType)
-                        _LOG.info('ID = %s', dataset_ref.dataId)
-                        ref = registry.findDataset(dataset_ref.datasetType,
-                                                   dataset_ref.dataId,
-                                                   collections=butler.run)
-                        _LOG.info('Butler = %s', ref)
-
-            # _LOG.info(' --- OUTPUTS ---')
-            # for node in qgraph.outputQuanta:
-            #     for dataset_refs in node.quantum.outputs.values():
-            #         _LOG.info('%s %s', node, dataset_refs)
-
-            # nodes = list()
-            # if gwf_job.qgraph_node_ids is not None:
-            #     for id in gwf_job.qgraph_node_ids:
-            #         qgraph = gwf_job.quantum_graph
-            #         if qgraph is not None:
-            #             #nodes.append(qgraph.getQuantumNodeByNodeId(id))
-            #
-            # butler = Butler(config['butlerConfig'], run=config['outCollection'])
-            # registry = butler.registry
-            # for node in nodes:
-            #     for dataset_refs in node.quantum.outputs.values():
-            #         for dataset_ref in dataset_refs:
-            #             ref = registry.findDataset(dataset_ref.datasetType,
-            #                                        dataset_ref.dataId,
-            #                                        collections=butler.run)
-            #             _LOG.info(ref)
-
             # store in members
             try:
                 job_id = int(gwf_job.name.split('_')[0])
@@ -259,7 +308,6 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
                 childs.append(child_name)
             local_workflow.local_predecessors[job_name] = parents
             local_workflow.local_successors[job_name] = childs
-
-
+        # Done
         _LOG.debug("Local dag attribs %s", local_workflow.run_attrs)
         return local_workflow
