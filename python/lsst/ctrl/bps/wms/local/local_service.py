@@ -82,15 +82,38 @@ class LocalService(BaseWmsService):
 
         return local_workflow
 
-    def check_job_input(self, job):
+    def check_job_input(self, workflow, job_name):
         """ Check input files for a given job in Butler
 
         Parameters
         ----------
-        job
+        job_name
 
         """
-        pass
+        butler = Butler(self.config['butlerConfig'], run=self.config['inCollection'])
+        registry = butler.registry
+        qgraph_file = workflow.local_jobs_input_files[job_name][0]
+        quantum_graph = QuantumGraph.loadUri(qgraph_file, DimensionUniverse())
+        _LOG.info(60 * "-")
+        _LOG.info('%s %s %s', job_name, qgraph_file, quantum_graph)
+        _LOG.info(' --- INPUTS ---')
+        for node in quantum_graph.inputQuanta:
+            _LOG.info('--- Node = %s', node)
+            for dataset_refs in node.quantum.inputs.values():
+                _LOG.info('Dataset %s', dataset_refs)
+                for dataset_ref in dataset_refs:
+                    _LOG.info('Type = %s', dataset_ref.datasetType)
+                    _LOG.info('ID = %s', dataset_ref.dataId)
+                    #_LOG.info('Butler Run = %s', butler.run)
+                    ref = registry.findDataset(dataset_ref.datasetType,
+                                               dataset_ref.dataId,
+                                               collections=butler.run) # ['HSC/defaults', 'HSC/calib/unbounded']
+                    if ref is not None:
+                        _LOG.info('Butler ref = %s', ref)
+                        uri = butler.getURI(ref, collections=butler.run) # ['HSC/defaults', 'HSC/calib/unbounded']
+                        _LOG.info("URI = {}\n".format(uri))
+                    else:
+                        _LOG.info("No URI found")
 
     def check_wkf_inputs(self, workflow):
         """ Check input files in Butler
@@ -101,7 +124,7 @@ class LocalService(BaseWmsService):
         """
         # input data
         _LOG.info(60 * "-")
-        butler = Butler(self.config['butlerConfig'], run=self.config['HSC/defaults'])
+        butler = Butler(self.config['butlerConfig'], run=self.config['inCollection'])
         registry = butler.registry
         # load quantum graph from pipetask init
         ptask_init_id = workflow.local_job_ids[0]
@@ -120,33 +143,13 @@ class LocalService(BaseWmsService):
                     #_LOG.info('Butler Run = %s', butler.run)
                     ref = registry.findDataset(dataset_ref.datasetType,
                                                dataset_ref.dataId,
-                                               collections=['HSC/defaults']) # butler.run
+                                               collections=butler.run) #
                     if ref is not None:
                         _LOG.info('Butler = %s', ref)
-                        uri = butler.getURI(ref, collections=['HSC/defaults'])
-                        _LOG.info("{}\n".format(uri))
-
-        # _LOG.info(' --- OUTPUTS ---')
-        # for node in quantum_graph.outputQuanta:
-        #     for dataset_refs in node.quantum.outputs.values():
-        #         _LOG.info('%s %s', node, dataset_refs)
-
-        # nodes = list()
-        # if gwf_job.qgraph_node_ids is not None:
-        #     for id in gwf_job.qgraph_node_ids:
-        #         qgraph = gwf_job.quantum_graph
-        #         if qgraph is not None:
-        #             #nodes.append(qgraph.getQuantumNodeByNodeId(id))
-        #
-        # butler = Butler(config['butlerConfig'], run=config['outCollection'])
-        # registry = butler.registry
-        # for node in nodes:
-        #     for dataset_refs in node.quantum.outputs.values():
-        #         for dataset_ref in dataset_refs:
-        #             ref = registry.findDataset(dataset_ref.datasetType,
-        #                                        dataset_ref.dataId,
-        #                                        collections=butler.run)
-        #             _LOG.info(ref)
+                        uri = butler.getURI(ref, collections=butler.run)
+                        _LOG.info("URI = {}\n".format(uri))
+                    else:
+                        _LOG.info("No URI found")
 
     def run_one_job(self, workflow, job_id, job_name, job_cmd):
         """ Run one job locally
@@ -187,9 +190,12 @@ class LocalService(BaseWmsService):
             ptask_init_id = workflow.local_job_ids[0]
             ptask_init_name = workflow.local_jobs[ptask_init_id][0]
             ptask_init_cmd = workflow.local_jobs[ptask_init_id][1]
-            self.run_one_job(workflow, ptask_init_id, ptask_init_name, ptask_init_cmd)
+            # self.run_one_job(workflow, ptask_init_id, ptask_init_name, ptask_init_cmd)
             # now check if input data are available
-            self.check_wkf_inputs(workflow)
+            # self.check_wkf_inputs(workflow)
+            for job_id in workflow.local_job_ids[1:10]:
+                job_name = workflow.local_jobs[job_id][0]
+                self.check_job_input(workflow, job_name)
 
         if not dry_run:
             _LOG.info("Submitting %s", workflow)
@@ -197,7 +203,6 @@ class LocalService(BaseWmsService):
                 job_name = workflow.local_jobs[job_id][0]
                 job_cmd = workflow.local_jobs[job_id][1]
                 _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
-                # self.check_job_input(job_id, job_name)
                 self.run_one_job(workflow, job_id, job_name, job_cmd)
 
         # jobs_queue = copy.copy(workflow.local_job_ids)
