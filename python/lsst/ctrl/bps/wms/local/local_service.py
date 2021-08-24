@@ -34,6 +34,13 @@ from lsst.pipe.base.graph import QuantumGraph
 
 _LOG = logging.getLogger(__name__)
 
+def get_job_id(name):
+    try:
+        job_id = int(name.split('_')[0])
+    except:
+        job_id = 0
+    return job_id
+
 
 class LocalService(BaseWmsService):
     """Local version of WMS service
@@ -63,23 +70,23 @@ class LocalService(BaseWmsService):
         # workflow.write(out_prefix)
         _LOG.info(60*"-")
         _LOG.info("Prepared a local workflow")
-        for job_id in local_workflow.local_job_ids[:10]:
+        # for job_id in local_workflow.local_job_ids[:10]:
+        for job_id in local_workflow.local_ordered_job_ids[:20]:
             _LOG.info("Job %d is %s \n %s", job_id, local_workflow.local_jobs[job_id][0],
                                                     local_workflow.local_jobs[job_id][1])
 
         _LOG.info(60*"-")
-        for job_id in local_workflow.local_job_ids[:10]:
+        for job_id in local_workflow.local_job_ids[:20]:
             job_name = local_workflow.local_jobs[job_id][0]
             inputs = local_workflow.local_jobs_input_files[job_name]
             outputs = local_workflow.local_jobs_output_files[job_name]
-            preds = local_workflow.local_predecessors[job_name]
-            succs = local_workflow.local_successors[job_name]
+            preds = local_workflow.local_predecessors[job_id]
+            succs = local_workflow.local_successors[job_id]
             _LOG.info("Job: %s", job_name)
             _LOG.info("\t inputs: %s", inputs)
             _LOG.info("\t outputs: %s", outputs)
             _LOG.info("\t predecessors: %s", preds)
             _LOG.info("\t successors: %s", succs)
-
         return local_workflow
 
     def check_job_input(self, workflow, job_name):
@@ -184,28 +191,39 @@ class LocalService(BaseWmsService):
         workflow : `~lsst.ctrl.bps.wms_service.BaseWorkflow`
             A single basic workflow to submit
         """
+        # Always run pipetask init first
+        ptask_init_id = workflow.local_job_ids[0]
+        ptask_init_name = workflow.local_jobs[ptask_init_id][0]
+        ptask_init_cmd = workflow.local_jobs[ptask_init_id][1]
+        self.run_one_job(workflow, ptask_init_id, ptask_init_name, ptask_init_cmd)
+
         if check_inputs:
             _LOG.info("Check inputs in butler, but first run pipetask init")
-            # run pipe task init
-            ptask_init_id = workflow.local_job_ids[0]
-            ptask_init_name = workflow.local_jobs[ptask_init_id][0]
-            ptask_init_cmd = workflow.local_jobs[ptask_init_id][1]
-            # self.run_one_job(workflow, ptask_init_id, ptask_init_name, ptask_init_cmd)
             # now check if input data are available
             # self.check_wkf_inputs(workflow)
-            for job_id in workflow.local_job_ids[1:10]:
+            # for job_id in workflow.local_job_ids[1:10]:
+            for job_id in workflow.local_ordered_job_ids[0:5]:
                 job_name = workflow.local_jobs[job_id][0]
                 self.check_job_input(workflow, job_name)
 
         if not dry_run:
             _LOG.info("Submitting %s", workflow)
-            for job_id in workflow.local_job_ids[1:10]:
-                job_name = workflow.local_jobs[job_id][0]
-                job_cmd = workflow.local_jobs[job_id][1]
-                _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
-                self.run_one_job(workflow, job_id, job_name, job_cmd)
+            _LOG.info("Smart job sequence")
+            _LOG.info(workflow.local_smart_job_sequence)
+            #for job_id in workflow.local_job_ids[1:10]:
+            # for job_id in workflow.local_ordered_job_ids:
+            for job_id in workflow.local_smart_job_sequence:
+            # do not rerun task init
+                if job_id > 0:
+                    job_name = workflow.local_jobs[job_id][0]
+                    job_cmd = workflow.local_jobs[job_id][1]
+                    _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
+                    self.run_one_job(workflow, job_id, job_name, job_cmd)
+        else:
+            _LOG.info("Smart job sequence")
+            _LOG.info(workflow.local_smart_job_sequence)
 
-        # jobs_queue = copy.copy(workflow.local_job_ids)
+        # jobs_queue = copy.copy(workflow.local_ordered_job_ids)
         # running_jobs = list()
         # while len(jobs_queue)>0:
         #     for job_id in jobs_queue:
@@ -277,6 +295,7 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
         local_workflow.local_jobs = dict()
         local_workflow.local_jobs_input_files = dict()
         local_workflow.local_jobs_output_files = dict()
+        local_workflow.local_ordered_job_ids = list()
         for job_name in generic_workflow:
             gwf_job = generic_workflow.get_job(job_name)
             # input files as pfn
@@ -292,11 +311,12 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
                 job_id = int(gwf_job.name.split('_')[0])
             except:
                 job_id = 0
+            local_workflow.local_ordered_job_ids.append(job_id)
             local_workflow.local_jobs[job_id] = (gwf_job.name, gwf_job.cmdline)
             local_workflow.local_jobs_input_files[job_name] = gwf_job_inputs
             local_workflow.local_jobs_output_files[job_name] = gwf_job_outputs
 
-        # Ordered list of job ids
+        # list of job ids ordered by number
         job_ids = list(local_workflow.local_jobs.keys())
         job_ids.sort()
         local_workflow.local_job_ids = job_ids
@@ -305,14 +325,36 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
         local_workflow.local_predecessors = dict()
         local_workflow.local_successors = dict()
         for job_name in generic_workflow:
+            job_id = get_job_id(job_name)
             childs = list()
             parents = list()
             for parent_name in generic_workflow.predecessors(job_name):
-                parents.append(parent_name)
+                id = get_job_id(parent_name)
+                parents.append(id)
             for child_name in generic_workflow.successors(job_name):
-                childs.append(child_name)
-            local_workflow.local_predecessors[job_name] = parents
-            local_workflow.local_successors[job_name] = childs
+                id = get_job_id(child_name)
+                childs.append(id)
+            local_workflow.local_predecessors[job_id] = parents
+            local_workflow.local_successors[job_id] = childs
+
+        # Build smart sequence
+        all_jobs_queue = copy.copy(local_workflow.local_ordered_job_ids)
+        all_jobs_queue.sort()
+        smart_job_sequence = list()
+        while len(all_jobs_queue)>0:
+            for id in all_jobs_queue:
+                print("working with ", id)
+                ready = True
+                print(local_workflow.local_predecessors[id])
+                for parent in local_workflow.local_predecessors[id]:
+                    print("\tparent ", parent)
+                    is_done = parent in smart_job_sequence
+                    ready = ready*is_done
+                if ready:
+                    print("adding ", id)
+                    smart_job_sequence.append(id)
+                    all_jobs_queue.remove(id)
+        local_workflow.local_smart_job_sequence = smart_job_sequence
         # Done
         _LOG.debug("Local dag attribs %s", local_workflow.run_attrs)
         return local_workflow
