@@ -19,17 +19,19 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-""" Placeholder HTCondor DAGMan API.  There is new work on a python DAGMan
-API from HTCondor.  However, at this time, it tries to make things easier by
-assuming DAG is easily broken into levels where there are 1-1 or all-to-all
-relationships to nodes in next level.  LSST workflows are more complicated.
+"""Placeholder HTCondor DAGMan API.
+
+There is new work on a python DAGMan API from HTCondor.  However, at this
+time, it tries to make things easier by assuming DAG is easily broken into
+levels where there are 1-1 or all-to-all relationships to nodes in next
+level.  LSST workflows are more complicated.
 """
 
-__all__ = ["DagStatus", "JobStatus", "RestrictedDict", "HTCJob", "HTCDag", "htc_escape",
-           "htc_write_attribs", "htc_write_condor_file", "htc_version", "htc_submit_dag",
-           "condor_q", "condor_history", "read_dag_status", "MISSING_ID",
-           "summary_from_dag", "read_dag_log", "read_node_status", "read_dag_nodes_log",
-           "htc_check_dagman_output", "pegasus_name_to_label"]
+__all__ = ["DagStatus", "JobStatus", "NodeStatus", "RestrictedDict", "HTCJob", "HTCDag", "htc_escape",
+           "htc_write_attribs", "htc_write_condor_file", "htc_version", "htc_submit_dag", "condor_q",
+           "condor_history", "read_dag_status", "MISSING_ID", "summary_from_dag", "read_dag_log",
+           "read_node_status", "read_dag_nodes_log", "htc_check_dagman_output", "pegasus_name_to_label"]
+
 
 import itertools
 import os
@@ -42,14 +44,13 @@ from enum import IntEnum
 from pathlib import Path
 import pprint
 import subprocess
+
 import networkx
 import classad
 import htcondor
 
-# from ...wms_service import WmsRunReport, WmsJobReport, WmsStates
 
-_LOG = logging.getLogger()
-
+_LOG = logging.getLogger(__name__)
 
 MISSING_ID = -99999
 
@@ -82,10 +83,12 @@ class JobStatus(IntEnum):
 class NodeStatus(IntEnum):
     """HTCondor's statuses for DAGman nodes.
     """
-    # (STATUS_NOT_READY): At least one parent has not yet finished or the node is a FINAL node.
+    # (STATUS_NOT_READY): At least one parent has not yet finished or the node
+    # is a FINAL node.
     NOT_READY = 0
 
-    # (STATUS_READY): All parents have finished, but the node is not yet running.
+    # (STATUS_READY): All parents have finished, but the node is not yet
+    # running.
     READY = 1
 
     # (STATUS_PRERUN): The node’s PRE script is running.
@@ -103,7 +106,8 @@ class NodeStatus(IntEnum):
     # (STATUS_DONE): The node has completed successfully.
     DONE = 5
 
-    # (STATUS_ERROR): The node has failed. StatusDetails has info (e.g., ULOG_JOB_ABORTED for deleted job).
+    # (STATUS_ERROR): The node has failed. StatusDetails has info (e.g.,
+    # ULOG_JOB_ABORTED for deleted job).
     ERROR = 6
 
 
@@ -120,14 +124,22 @@ HTC_VALID_JOB_KEYS = {
     "when_to_transfer_output",
     "getenv",
     "notification",
+    "notify_user",
+    "concurrency_limit",
     "transfer_executable",
     "transfer_input_files",
     "request_cpus",
     "request_memory",
     "request_disk",
+    "priority",
+    "category",
     "requirements",
+    "on_exit_hold",
+    "on_exit_hold_reason",
+    "on_exit_hold_subcode"
 }
-HTC_VALID_JOB_DAG_KEYS = {"pre", "post", "executable"}
+HTC_VALID_JOB_DAG_KEYS = {"vars", "pre", "post", "retry", "retry_unless_exit",
+                          "abort_dag_on", "abort_exit"}
 
 
 class RestrictedDict(MutableMapping):
@@ -272,10 +284,11 @@ def htc_write_condor_file(filename, job_name, job, job_attrs):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "w") as fh:
         for key, value in job.items():
-            if key in HTC_QUOTE_KEYS:
-                print(f'{key}="{htc_escape(value)}"', file=fh)
-            else:
-                print(f"{key}={value}", file=fh)
+            if value is not None:
+                if key in HTC_QUOTE_KEYS:
+                    print(f'{key}="{htc_escape(value)}"', file=fh)
+                else:
+                    print(f"{key}={value}", file=fh)
         for key in ["output", "error", "log"]:
             if key not in job:
                 filename = f"{job_name}.$(Cluster).${key[:3]}"
@@ -411,13 +424,13 @@ def _htc_write_job_commands(stream, name, jobs):
     if "pre_skip" in jobs:
         print(f"PRE_SKIP {name} {jobs['pre_skip']}", file=stream)
 
-    if "retry" in jobs:
+    if "retry" in jobs and jobs["retry"]:
         print(f"RETRY {name} {jobs['retry']} ", end='', file=stream)
         if "retry_unless_exit" in jobs:
             print(f"UNLESS-EXIT {jobs['retry_unless_exit']}", end='', file=stream)
         print("\n", file=stream)
 
-    if "abort_dag_on" in jobs:
+    if "abort_dag_on" in jobs and jobs["abort_dag_on"]:
         print(f"ABORT-DAG-ON {name} {jobs['abort_dag_on']['node_exit']}"
               f" RETURN {jobs['abort_dag_on']['abort_exit']}", file=stream)
 
@@ -444,7 +457,6 @@ class HTCJob:
         self.cmds = RestrictedDict(HTC_VALID_JOB_KEYS, initcmds)
         self.dagcmds = RestrictedDict(HTC_VALID_JOB_DAG_KEYS, initdagcmds)
         self.attrs = initattrs
-        self.filename = None
         self.subfile = None
 
     def __str__(self):
@@ -480,7 +492,8 @@ class HTCJob:
         """
         if self.attrs is None:
             self.attrs = {}
-        self.attrs.update(new_attrs)
+        if new_attrs:
+            self.attrs.update(new_attrs)
 
     def write_submit_file(self, submit_path, job_subdir=""):
         """Write job description to submit file.
@@ -492,10 +505,11 @@ class HTCJob:
         job_subdir : `str`, optional
             Template for job subdir.
         """
-        self.subfile = f"{self.name}.sub"
-        job_subdir = job_subdir.format(self=self)
-        if job_subdir:
-            self.subfile = os.path.join(job_subdir, self.subfile)
+        if not self.subfile:
+            self.subfile = f"{self.name}.sub"
+            job_subdir = job_subdir.format(self=self)
+            if job_subdir:
+                self.subfile = os.path.join(job_subdir, self.subfile)
         htc_write_condor_file(os.path.join(submit_path, self.subfile), self.name, self.cmds, self.attrs)
 
     def write_dag_commands(self, stream):
@@ -539,6 +553,7 @@ class HTCDag(networkx.DiGraph):
         self.graph["attr"] = dict()
         self.graph["run_id"] = None
         self.graph["submit_path"] = None
+        self.graph["final_job"] = None
 
     def __str__(self):
         """Represent basic DAG info as string.
@@ -568,9 +583,9 @@ class HTCDag(networkx.DiGraph):
         ----------
         job : `HTCJob`
             HTCJob to add to the HTCDag
-        parent_names : `Iterable` of `str`, optional
+        parent_names : `Iterable` [`str`], optional
             Names of parent jobs
-        child_names : `Iterable` of `str`, optional
+        child_names : `Iterable` [`str`], optional
             Names of child jobs
         """
         assert isinstance(job, HTCJob)
@@ -587,12 +602,22 @@ class HTCDag(networkx.DiGraph):
 
         Parameters
         ----------
-        parents : list of `str`
+        parents : `list` [`str`]
             Contains parent job name(s).
-        children : list of `str`
+        children : `list` [`str`]
             Contains children job name(s).
         """
         self.add_edges_from(itertools.product(parents, children))
+
+    def add_final_job(self, job):
+        """Add an HTCJob for the FINAL job in HTCDag.
+
+        Parameters
+        ----------
+        job : `HTCJob`
+            HTCJob to add to the HTCDag as a FINAL job.
+        """
+        self.graph['final_job'] = job
 
     def del_job(self, job_name):
         """Delete the job from the DAG.
@@ -632,6 +657,14 @@ class HTCDag(networkx.DiGraph):
                 print(f"PARENT {edge[0]} CHILD {edge[1]}", file=fh)
             print(f"DOT {self.name}.dot", file=fh)
             print(f"NODE_STATUS_FILE {self.name}.node_status", file=fh)
+            if self.graph["final_job"]:
+                job = self.graph["final_job"]
+                job.write_submit_file(submit_path, job_subdir)
+                print(f"FINAL {job.name} {job.subfile}", file=fh)
+                if "pre" in job.dagcmds:
+                    print(f"SCRIPT PRE {job.name} {job.dagcmds['pre']}", file=fh)
+                if "post" in job.dagcmds:
+                    print(f"SCRIPT POST {job.name} {job.dagcmds['post']}", file=fh)
 
     def dump(self, fh):
         """Dump DAG info to output stream.
@@ -648,6 +681,9 @@ class HTCDag(networkx.DiGraph):
             data.dump(fh)
         for edge in self.edges():
             print(f"PARENT {edge[0]} CHILD {edge[1]}", file=fh)
+        if self.graph["final_job"]:
+            print(f'FINAL {self.graph["final_job"].name}:', file=fh)
+            self.graph["final_job"].dump(fh)
 
     def write_dot(self, filename):
         """Write a dot version of the DAG.
@@ -739,7 +775,7 @@ def summary_from_dag(dir_name):
     summary : `str`
         Semi-colon separated list of job labels and counts.
         (Same format as saved in dag classad.)
-    job_name_to_label : `dict` of `str`
+    job_name_to_pipetask : `dict` [`str`, `str`]
         Mapping of job names to job labels
     """
     dag = next(Path(dir_name).glob("*.dag"))
@@ -805,7 +841,7 @@ def read_dag_status(wms_path):
 
     Parameters
     ----------
-    path : `str`
+    wms_path : `str`
         Path that includes node status file for a run.
 
     Returns
@@ -815,7 +851,8 @@ def read_dag_status(wms_path):
     """
     dag_classad = {}
 
-    # while this is probably more up to date than dag classad, only read from file if need to.
+    # While this is probably more up to date than dag classad, only read from
+    # file if need to.
     try:
         try:
             node_stat_file = next(Path(wms_path).glob("*.node_status"))
@@ -938,14 +975,14 @@ def read_dag_log(wms_path):
 
     Returns
     -------
-    info : `dict`
+    info : `dict` [`str`, `Any`]
         HTCondor job information read from the log file mapped to HTCondor
         job id.
 
     Raises
     ------
     StopIteration
-        If cannot find dagman log file in given wms_path.
+        If cannot find DAGMan log file in given wms_path.
     """
     wms_workflow_id = 0
     dag_info = {}
@@ -1046,8 +1083,8 @@ def htc_check_dagman_output(wms_path):
     Returns
     -------
     message : `str`
-        Message containing error messages from the DAGman output.  Empty string if
-        no messages.
+        Message containing error messages from the DAGman output.  Empty
+        string if no messages.
     """
     message = ""
     filename = next(Path(wms_path).glob("*.dag.dagman.out"))

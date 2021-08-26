@@ -19,49 +19,98 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Class definitions for a Generic Workflow Graph
+"""Class definitions for a Generic Workflow Graph.
 """
+
+__all__ = ["GenericWorkflow", "GenericWorkflowFile", "GenericWorkflowJob", "GenericWorkflowExec"]
+
 
 import dataclasses
 import itertools
+import logging
 from typing import Optional
+
 import networkx as nx
 
 from lsst.daf.butler.core.utils import iterable
-from lsst.daf.butler import DatasetRef
-from lsst.pipe.base import QuantumGraph
 from .bps_draw import draw_networkx_dot
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
 class GenericWorkflowFile:
     """Information about a file that may be needed by various workflow
-    management services."""
+    management services.
+    """
     name: str
-    wms_transfer: bool
+    """Lookup key (logical file name) of file/directory. Must be unique
+    within run.
+    """
+
     src_uri: str or None  # don't know that need ButlerURI
-    dataset_ref: DatasetRef or None
-    dest_uri: str or None    # don't know that need ButlerURI
-    logical_file_name: str or None
+    """Original location of file/directory.
+    """
+
+    wms_transfer: bool
+    """Whether the WMS should ignore file or not.  Default is False.
+    """
+
+    job_access_remote: bool
+    """Whether the job can remotely access file (using separately specified
+    file access protocols).  Default is False.
+    """
+
+    job_shared: bool
+    """Whether job requires its own copy of this file.  Default is False.
+    """
 
     # As of python 3.7.8, can't use __slots__ + dataclass if give default
-    # values, so writing own __init__
-    def __init__(self, name: str, wms_transfer: bool = False, src_uri=None,
-                 dataset_ref=None, dest_uri=None, logical_file_name=None):
+    # values, so writing own __init__.
+    def __init__(self, name: str, src_uri: str = None, wms_transfer: bool = False,
+                 job_access_remote: bool = False, job_shared: bool = False):
         self.name = name
-        self.wms_transfer = wms_transfer
         self.src_uri = src_uri
-        self.dataset_ref = dataset_ref
-        self.dest_uri = dest_uri
-        self.logical_file_name = logical_file_name
+        self.wms_transfer = wms_transfer
+        self.job_access_remote = job_access_remote
+        self.job_shared = job_shared
 
-    __slots__ = ("name", "wms_transfer", "dataset_ref", "src_uri", "dest_uri", "logical_file_name")
+    __slots__ = ("name", "src_uri", "wms_transfer", "job_access_remote", "job_shared")
 
     def __hash__(self):
         return hash(self.name)
 
-    def __str__(self):
-        return f"GenericWorkflowJob(name={self.name})"
+
+@dataclasses.dataclass
+class GenericWorkflowExec:
+    """Information about an executable that may be needed by various workflow
+    management services.
+    """
+    name: str
+    """Lookup key (logical file name) of executable. Must be unique
+    within run.
+    """
+
+    src_uri: str or None  # don't know that need ButlerURI
+    """Original location of executable.
+    """
+
+    transfer_executable: bool
+    """Whether the WMS/plugin is responsible for staging executable to
+    location usable by job.
+    """
+
+    # As of python 3.7.8, can't use __slots__ + dataclass if give default
+    # values, so writing own __init__.
+    def __init__(self, name: str, src_uri: str = None, transfer_executable: bool = False):
+        self.name = name
+        self.src_uri = src_uri
+        self.transfer_executable = transfer_executable
+
+    __slots__ = ("name", "src_uri", "transfer_executable")
+
+    def __hash__(self):
+        return hash(self.name)
 
 
 @dataclasses.dataclass
@@ -70,37 +119,126 @@ class GenericWorkflowJob:
     management services.
     """
     name: str
-    label: Optional[str]
-    tags: Optional[str]
-    cmdline: Optional[str]
-    request_memory: Optional[int]    # MB
-    request_cpus: Optional[int]       # cores
-    request_disk: Optional[int]      # MB
-    request_walltime: Optional[str]  # minutes
-    compute_site: Optional[str]
-    mail_to: Optional[str]
-    when_to_mail: Optional[str]
-    number_of_retries: Optional[int]
-    retry_unless_exit: Optional[int]
-    abort_on_value: Optional[int]
-    abort_return_value: Optional[int]
-    priority: Optional[str]
-    category: Optional[str]
-    pre_cmdline: Optional[str]
-    post_cmdline: Optional[str]
-    profile: Optional[dict]
-    attrs: Optional[dict]
-    environment: Optional[dict]
-    quantum_graph: Optional[QuantumGraph]
-    qgraph_node_ids: Optional[list]
-    quanta_summary: Optional[str]
+    """Name of job.  Must be unique within workflow.
+    """
 
-    # As of python 3.7.8, can't use __slots__ if give default values, so writing own __init__
+    label: Optional[str]
+    """Primary user-facing label for job.  Does not need to be unique
+    and may be used for summary reports.
+    """
+
+    tags: Optional[dict]
+    """Other key/value pairs for job that user may want to use as a filter.
+    """
+
+    executable: Optional[GenericWorkflowExec]
+    """Executable for job.
+    """
+
+    arguments: Optional[str]
+    """Command line arguments for job.
+    """
+
+    cmdvals: Optional[dict]
+    """Values for variables in cmdline when using lazy command line creation.
+    """
+
+    request_memory: Optional[int]    # MB
+    """Max memory (in MB) that the job is expected to need.
+    """
+
+    request_cpus: Optional[int]      # cores
+    """Max number of cpus that the job is expected to need.
+    """
+
+    request_disk: Optional[int]      # MB
+    """Max amount of job scratch disk (in MB) that the job is expected to need.
+    """
+
+    request_walltime: Optional[str]  # minutes
+    """Max amount of time (in seconds) that the job is expected to need.
+    """
+
+    compute_site: Optional[str]
+    """Key to look up site-specific information for running the job.
+    """
+
+    mail_to: Optional[str]
+    """Comma separated list of email addresses for emailing job status.
+    """
+
+    when_to_mail: Optional[str]
+    """WMS-specific terminology for when to email job status.
+    """
+
+    number_of_retries: Optional[int]
+    """Number of times to automatically retry a failed job.
+    """
+
+    retry_unless_exit: Optional[int]
+    """Exit code for job that means to not automatically retry.
+    """
+
+    abort_on_value: Optional[int]
+    """Job exit value for signals to abort the entire workflow.
+    """
+
+    abort_return_value: Optional[int]
+    """Exit value to use when aborting the entire workflow.
+    """
+
+    priority: Optional[str]
+    """Initial priority of job in WMS-format.
+    """
+
+    category: Optional[str]
+    """WMS-facing label of job within single workflow (e.g., can be used for
+    throttling jobs within a single workflow).
+    """
+
+    concurrency_limit: Optional[list]
+    """Names of concurrency limits that the WMS plugin can appropriately
+    translate to limit the number of this job across all running workflows.
+    """
+
+    queue: Optional[str]
+    """Name of queue to use.  Different WMS can translate
+    this concept differently.
+    """
+
+    pre_cmdline: Optional[str]
+    """Command line to be executed prior to executing job.
+    """
+
+    post_cmdline: Optional[str]
+    """Command line to be executed after job executes.
+
+    Should be executed regardless of exit status.
+    """
+
+    profile: Optional[dict]
+    """Nested dictionary of WMS-specific key/value pairs with primary key being
+    WMS key (e.g., pegasus, condor, panda).
+    """
+
+    attrs: Optional[dict]
+    """Key/value pairs of job attributes (for WMS that have attributes in
+    addition to commands).
+    """
+
+    environment: Optional[dict]
+    """Environment variable names and values to be explicitly set inside job.
+    """
+
+    # As of python 3.7.8, can't use __slots__ if give default values, so
+    # writing own __init__.
     def __init__(self, name: str):
         self.name = name
         self.label = None
-        self.tags = None
-        self.cmdline = None
+        self.tags = {}
+        self.executable = None
+        self.arguments = None
+        self.cmdvals = {}
         self.request_memory = None
         self.request_cpus = None
         self.request_disk = None
@@ -114,20 +252,20 @@ class GenericWorkflowJob:
         self.abort_return_value = None
         self.priority = None
         self.category = None
+        self.concurrency_limit = []
+        self.queue = None
         self.pre_cmdline = None
         self.post_cmdline = None
         self.profile = {}
         self.attrs = {}
         self.environment = {}
-        self.quantum_graph = None
-        self.qgraph_node_ids = None
-        self.quanta_summary = ""
 
-    __slots__ = ("name", "label", "tags", "mail_to", "when_to_mail", "cmdline", "request_memory",
-                 "request_cpus", "request_disk", "request_walltime", "compute_site", "environment",
+    __slots__ = ("name", "label", "tags", "mail_to", "when_to_mail",
+                 "executable", "arguments", "cmdvals",
+                 "request_memory", "request_cpus", "request_disk", "request_walltime",
                  "number_of_retries", "retry_unless_exit", "abort_on_value", "abort_return_value",
-                 "priority", "category", "pre_cmdline", "post_cmdline", "profile", "attrs",
-                 "quantum_graph", "qgraph_node_ids", "quanta_summary")
+                 "compute_site", "environment", "priority", "category", "concurrency_limit",
+                 "queue", "pre_cmdline", "post_cmdline", "profile", "attrs")
 
     def __hash__(self):
         return hash(self.name)
@@ -152,7 +290,11 @@ class GenericWorkflow(nx.DiGraph):
         self._name = name
         self.run_attrs = {}
         self._files = {}
+        self._executables = {}
+        self._inputs = {}   # mapping job.names to list of GenericWorkflowFile
+        self._outputs = {}  # mapping job.names to list of GenericWorkflowFile
         self.run_id = None
+        self._final = None
 
     @property
     def name(self):
@@ -167,6 +309,7 @@ class GenericWorkflow(nx.DiGraph):
 
     def get_files(self, data=False, transfer_only=True):
         """Retrieve files from generic workflow.
+
         Need API in case change way files are stored (e.g., make
         workflow a bipartite graph with jobs and files nodes).
 
@@ -174,14 +317,15 @@ class GenericWorkflow(nx.DiGraph):
         ----------
         data : `bool`, optional
             Whether to return the file data as well as the file object name.
+            (The defaults is False.)
         transfer_only : `bool`, optional
             Whether to only return files for which a workflow management system
             would be responsible for transferring.
 
         Returns
         -------
-        files : `list` of `~lsst.ctrl.bps.generic_workflow.GenericWorkflowFile`
-            Files from generic workflow meeting specifications.
+        files : `list` [`lsst.ctrl.bps.GenericWorkflowFile`] or `list` [`str`]
+            File names or objects from generic workflow meeting specifications.
         """
         files = []
         for filename, file in self._files.items():
@@ -197,27 +341,28 @@ class GenericWorkflow(nx.DiGraph):
 
         Parameters
         ----------
-        job : `~lsst.ctrl.bps.generic_workflow.GenericWorkflowJob`
+        job : `lsst.ctrl.bps.GenericWorkflowJob`
             Job to add to the generic workflow.
-        parent_names : `list` of `str`, optional
+        parent_names : `list` [`str`], optional
             Names of jobs that are parents of given job
-        child_names : `list` of `str`, optional
+        child_names : `list` [`str`], optional
             Names of jobs that are children of given job
         """
         if not isinstance(job, GenericWorkflowJob):
             raise RuntimeError(f"Invalid type for job to be added to GenericWorkflowGraph ({type(job)}).")
         if self.has_node(job.name):
             raise RuntimeError(f"Job {job.name} already exists in GenericWorkflowGraph.")
-        super().add_node(job.name, job=job, inputs={}, outputs={})
+        super().add_node(job.name, job=job)
         self.add_job_relationships(parent_names, job.name)
         self.add_job_relationships(job.name, child_names)
+        self.add_executable(job.executable)
 
     def add_node(self, node_for_adding, **attr):
         """Override networkx function to call more specific add_job function.
 
         Parameters
         ----------
-        node_for_adding : `~lsst.ctrl.bps.generic_workflow.GenericWorkflowJob`
+        node_for_adding : `lsst.ctrl.bps.GenericWorkflowJob`
             Job to be added to generic workflow.
         attr :
             Needed to match original networkx function, but not used.
@@ -230,9 +375,9 @@ class GenericWorkflow(nx.DiGraph):
 
         Parameters
         ----------
-        parents : `list` of `str`
+        parents : `list` [`str`]
             Parent job names.
-        children : `list` of `str`
+        children : `list` [`str`]
             Children job names.
         """
         if parents is not None and children is not None:
@@ -243,10 +388,11 @@ class GenericWorkflow(nx.DiGraph):
 
         Parameters
         ----------
-        ebunch_to_add : Iterable of `tuple` of `str`
-            Iterable of job name pairs between which a dependency should be saved.
+        ebunch_to_add : Iterable [`tuple`]
+            Iterable of job name pairs between which a dependency should be
+            saved.
         attr : keyword arguments, optional
-            Data can be assigned using keyword arguments (not currently used)
+            Data can be assigned using keyword arguments (not currently used).
         """
         for edge_to_add in ebunch_to_add:
             self.add_edge(edge_to_add[0], edge_to_add[1], **attr)
@@ -279,7 +425,7 @@ class GenericWorkflow(nx.DiGraph):
 
         Returns
         -------
-        job : `~lsst.ctrl.bps.generic_workflow.GenericWorkflowJob`
+        job : `lsst.ctrl.bps.GenericWorkflowJob`
             Job matching given job_name.
         """
         return self.nodes[job_name]["job"]
@@ -300,24 +446,25 @@ class GenericWorkflow(nx.DiGraph):
         # Delete job node (which deleted edges).
         self.remove_node(job_name)
 
-    def add_job_inputs(self, job_name: str, files):
+    def add_job_inputs(self, job_name, files):
         """Add files as inputs to specified job.
 
         Parameters
         ----------
         job_name : `str`
             Name of job to which inputs should be added
-        files : `~lsst.ctrl.bps.generic_workflow.GenericWorkflowFile` or `list`
+        files : `lsst.ctrl.bps.GenericWorkflowFile` or \
+                `list` [`lsst.ctrl.bps.GenericWorkflowFile`]
             File object(s) to be added as inputs to the specified job.
         """
-        job_inputs = self.nodes[job_name]["inputs"]
+        self._inputs.setdefault(job_name, [])
         for file in iterable(files):
             # Save the central copy
             if file.name not in self._files:
                 self._files[file.name] = file
 
             # Save the job reference to the file
-            job_inputs[file.name] = file
+            self._inputs[job_name].append(file)
 
     def get_file(self, name):
         """Retrieve a file object by name.
@@ -329,10 +476,23 @@ class GenericWorkflow(nx.DiGraph):
 
         Returns
         -------
-        file_ : `~lsst.ctrl.bps.generic_workflow.GenericWorkflowFile`
+        gwfile : `lsst.ctrl.bps.GenericWorkflowFile`
             File matching given name.
         """
         return self._files[name]
+
+    def add_file(self, gwfile):
+        """Add file object.
+
+        Parameters
+        ----------
+        gwfile : `lsst.ctrl.bps.GenericWorkflowFile`
+            File object to add to workflow
+        """
+        if gwfile.name not in self._files:
+            self._files[gwfile.name] = gwfile
+        else:
+            _LOG.debug("Skipped add_file for existing file %s", gwfile.name)
 
     def get_job_inputs(self, job_name, data=True, transfer_only=False):
         """Return the input files for the given job.
@@ -349,18 +509,18 @@ class GenericWorkflow(nx.DiGraph):
 
         Returns
         -------
-        inputs : `list` of `~lsst.ctrl.bps.generic_workflow.GenericWorkflowFile`
-            Input files for the given job.
+        inputs : `list` [`lsst.ctrl.bps.GenericWorkflowFile`]
+            Input files for the given job.  If no input files for the job,
+            returns an empty list.
         """
-        job_inputs = self.nodes[job_name]["inputs"]
         inputs = []
-        for file_name in job_inputs:
-            file = self._files[file_name]
-            if not transfer_only or file.wms_transfer:
-                if not data:
-                    inputs.append(file_name)
-                else:
-                    inputs.append(self._files[file_name])
+        if job_name in self._inputs:
+            for gwfile in self._inputs[job_name]:
+                if not transfer_only or gwfile.wms_transfer:
+                    if not data:
+                        inputs.append(gwfile.name)
+                    else:
+                        inputs.append(gwfile)
         return inputs
 
     def add_job_outputs(self, job_name, files):
@@ -370,16 +530,18 @@ class GenericWorkflow(nx.DiGraph):
         ----------
         job_name : `str`
             Name of job to which the files should be added as outputs.
-        files : `list` of `~lsst.ctrl.bps.generic_workflow.GenericWorkflowFile`
+        files : `list` [`lsst.ctrl.bps.GenericWorkflowFile`]
             File objects to be added as outputs for specified job.
         """
-        job_outputs = self.nodes[job_name]["outputs"]
-        for file in files:
+        self._outputs.setdefault(job_name, [])
+
+        for file_ in iterable(files):
             # Save the central copy
-            if file.name not in self._files:
-                self._files[file.name] = file
+            if file_.name not in self._files:
+                self._files[file_.name] = file_
+
             # Save the job reference to the file
-            job_outputs[file.name] = file
+            self._outputs[job_name].append(file_)
 
     def get_job_outputs(self, job_name, data=True, transfer_only=False):
         """Return the output files for the given job.
@@ -398,18 +560,20 @@ class GenericWorkflow(nx.DiGraph):
 
         Returns
         -------
-        outputs : `list` of `~lsst.ctrl.bps.generic_workflow.GenericWorkflowFile`
-            Output files for the given job.
+        outputs : `list` [`lsst.ctrl.bps.GenericWorkflowFile`]
+            Output files for the given job. If no output files for the job,
+            returns an empty list.
         """
-        job_outputs = self.nodes[job_name]["outputs"]
         outputs = []
-        for file_name in job_outputs:
-            file = self._files[file_name]
-            if not transfer_only or file.wms_transfer:
-                if not data:
-                    outputs.append(file_name)
-                else:
-                    outputs.append(self._files[file_name])
+
+        if job_name in self._outputs:
+            for file_name in self._outputs[job_name]:
+                file = self._files[file_name]
+                if not transfer_only or file.wms_transfer:
+                    if not data:
+                        outputs.append(file_name)
+                    else:
+                        outputs.append(self._files[file_name])
         return outputs
 
     def draw(self, stream, format_="dot"):
@@ -461,7 +625,7 @@ class GenericWorkflow(nx.DiGraph):
 
         Returns
         -------
-        generic_workflow : `~lsst.ctrl.bps.generic_workflow.GenericWorkflow`
+        generic_workflow : `lsst.ctrl.bps.GenericWorkflow`
             Generic workflow loaded from the given stream
         """
         if format_ == "pickle":
@@ -474,3 +638,102 @@ class GenericWorkflow(nx.DiGraph):
         """
         # Make sure a directed acyclic graph
         assert nx.algorithms.dag.is_directed_acyclic_graph(self)
+
+    def add_workflow_source(self, workflow):
+        """Add given workflow as new source to this workflow.
+
+        Parameters
+        ----------
+        workflow : `lsst.ctrl.bps.GenericWorkflow`
+        """
+        # Find source nodes in self.
+        self_sources = [n for n in self if self.in_degree(n) == 0]
+        _LOG.debug("self_sources = %s", self_sources)
+
+        # Find sink nodes of workflow.
+        new_sinks = [n for n in workflow if workflow.out_degree(n) == 0]
+        _LOG.debug("new sinks = %s", new_sinks)
+
+        # Add new workflow nodes to self graph and make new edges.
+        self.add_nodes_from(workflow.nodes(data=True))
+        self.add_edges_from(workflow.edges())
+        for source in self_sources:
+            for sink in new_sinks:
+                self.add_edge(sink, source)
+
+        # Files are stored separately so copy them.
+        for job_name in workflow:
+            self.add_job_inputs(job_name, workflow.get_job_inputs(job_name, data=True))
+            self.add_job_outputs(job_name, workflow.get_job_outputs(job_name, data=True))
+            self.add_executable(workflow.get_job(job_name).executable)
+
+    def add_final(self, final):
+        """Add special final job/workflow to the generic workflow.
+
+        Parameters
+        ----------
+        final : `lsst.ctrl.bps.GenericWorkflowJob` or \
+                `lsst.ctrl.bps.GenericWorkflow`
+            Information needed to execute the special final job(s), the
+            job(s) to be executed after all jobs that can be executed
+            have been executed regardless of exit status of any of the
+            jobs.
+        """
+        if not isinstance(final, GenericWorkflowJob) and not isinstance(final, GenericWorkflow):
+            raise TypeError("Invalid type for GenericWorkflow final ({type(final)})")
+
+        self._final = final
+        if isinstance(final, GenericWorkflowJob):
+            self.add_executable(final.executable)
+
+    def get_final(self):
+        """Return job/workflow to be executed after all jobs that can be
+        executed have been executed regardless of exit status of any of
+        the jobs.
+
+        Returns
+        -------
+        final : `lsst.ctrl.bps.GenericWorkflowJob` or \
+                `lsst.ctrl.bps.GenericWorkflow`
+            Information needed to execute final job(s).
+        """
+        return self._final
+
+    def add_executable(self, executable):
+        """Add executable to workflow's list of executables.
+
+        Parameters
+        ----------
+        executable : `lsst.ctrl.bps.GenericWorkflowExec`
+            Executable object to be added to workflow.
+        """
+        if executable is not None:
+            self._executables[executable.name] = executable
+        else:
+            _LOG.warning("executable not specified (None); cannot add to the workflow's list of executables")
+
+    def get_executables(self, data=False, transfer_only=True):
+        """Retrieve executables from generic workflow.
+
+        Parameters
+        ----------
+        data : `bool`, optional
+            Whether to return the executable data as well as the exec object
+            name.  (The defaults is False.)
+        transfer_only : `bool`, optional
+            Whether to only return executables for which transfer_executable
+            is True.
+
+        Returns
+        -------
+        execs : `list` [`lsst.ctrl.bps.GenericWorkflowExec`] or `list` [`str`]
+            Filtered executable names or objects from generic workflow.
+        """
+        execs = []
+        for name, executable in self._executables.items():
+            if not transfer_only or executable.transfer_executable:
+                if not data:
+                    execs.append(name)
+                else:
+                    execs.append(executable)
+        return execs

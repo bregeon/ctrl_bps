@@ -23,7 +23,7 @@ import shutil
 import tempfile
 import unittest
 
-from lsst.ctrl.bps.bps_config import BpsConfig
+from lsst.ctrl.bps import BpsConfig
 from lsst.ctrl.bps.pre_transform import execute, create_quantum_graph
 
 
@@ -64,10 +64,13 @@ class TestCreatingQuantumGraph(unittest.TestCase):
         settings = {
             "createQuantumGraph": "touch {qgraphFile}",
             "submitPath": self.tmpdir,
+            "whenSaveJobQgraph": "NEVER",
+            "uniqProcName": "my_test",
+            "qgraphFileTemplate": "{uniqProcName}.qgraph"
         }
         config = BpsConfig(settings, search_order=[])
         create_quantum_graph(config, self.tmpdir)
-        self.assertTrue(os.path.exists(os.path.join(self.tmpdir, ".qgraph")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmpdir, config["qgraphFileTemplate"])))
 
     def testCreatingQuantumGraphFailure(self):
         """Test if an exception is raised when creating qgraph file fails."""

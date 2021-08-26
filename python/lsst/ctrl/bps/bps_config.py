@@ -19,28 +19,40 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+"""Configuration class that adds order to searching sections for value,
+expands environment variables and other config variables.
 """
-Configuration class that adds order to searching sections for value,
-expands environment variables and other config variables
-"""
+
+__all__ = ["BPS_SEARCH_ORDER", "BpsConfig", "BpsFormatter"]
+
 
 from os.path import expandvars
 import logging
 import copy
 import string
+import re
+from importlib.resources import path as resources_path
 
 from lsst.daf.butler.core.config import Config
 
-_LOG = logging.getLogger()
+from . import etc
+
+_LOG = logging.getLogger(__name__)
+
+BPS_SEARCH_ORDER = ["bps_cmdline", "payload", "pipetask", "site", "bps_defined"]
+
+# Need a string that won't be a valid default value
+# to indicate whether default was defined for search.
+# And None is a valid default value.
+_NO_SEARCH_DEFAULT_VALUE = "__NO_SEARCH_DEFAULT_VALUE__"
 
 
 class BpsFormatter(string.Formatter):
-    """String formatter class that allows BPS config
-    search options
+    """String formatter class that allows BPS config search options.
     """
     def get_field(self, field_name, args, kwargs):
         _, val = args[0].search(field_name, opt=args[1])
-        return (val, field_name)
+        return val, field_name
 
     def get_value(self, key, args, kwargs):
         _, val = args[0].search(key, opt=args[1])
@@ -55,7 +67,7 @@ class BpsConfig(Config):
     other : `str`, `dict`, `Config`, `BpsConfig`
         Path to a yaml file or a dict/Config/BpsConfig containing configuration
         to copy.
-    search_order : `list` of `str`, optional
+    search_order : `list` [`str`], optional
         Root section names in the order in which they should be searched.
     """
     def __init__(self, other, search_order=None):
@@ -73,6 +85,16 @@ class BpsConfig(Config):
         # using the inherited update() method which does not rely on super
         # class __getitem__ method.
         super().__init__()
+
+        if isinstance(other, str):
+            # First load default config from ctrl_bps, then override with
+            # user config.
+            with resources_path(etc, "bps_defaults.yaml") as bps_defaults:
+                tmp_config = Config(str(bps_defaults))
+            user_config = Config(other)
+            tmp_config.update(user_config)
+            other = tmp_config
+
         try:
             config = Config(other)
         except RuntimeError:
@@ -94,17 +116,17 @@ class BpsConfig(Config):
                 self[key] = {}
 
     def copy(self):
-        """Makes a copy of config
+        """Make a copy of config.
 
         Returns
         -------
-        copy : `~lsst.ctrl.bps.bps_config.BpsConfig`
-            A duplicate of itself
+        copy : `lsst.ctrl.bps.BpsConfig`
+            A duplicate of itself.
         """
         return BpsConfig(self)
 
     def __getitem__(self, name):
-        """Returns the value from the config for the given name
+        """Return the value from the config for the given name.
 
         Parameters
         ----------
@@ -113,15 +135,15 @@ class BpsConfig(Config):
 
         Returns
         -------
-        val : `str`, `int`, `~lsst.ctrl.bps.bps_config.BPSConfig`, ...
-            Value from config if found
+        val : `str`, `int`, `lsst.ctrl.bps.BpsConfig`, ...
+            Value from config if found.
         """
         _, val = self.search(name, {})
 
         return val
 
     def __contains__(self, name):
-        """Checks whether name is in config.
+        """Check whether name is in config.
 
         Parameters
         ----------
@@ -131,13 +153,13 @@ class BpsConfig(Config):
         Returns
         -------
         found : `bool`
-            Whether name was in config or not
+            Whether name was in config or not.
         """
         found, _ = self.search(name, {})
         return found
 
     def search(self, key, opt=None):
-        """Searches for key using given opt following hierarchy rules.
+        """Search for key using given opt following hierarchy rules.
 
         Search hierarchy rules: current values, a given search object, and
         search order of config sections.
@@ -146,7 +168,7 @@ class BpsConfig(Config):
         ----------
         key : `str`
             Key to look for in config.
-        opt : `dict`, optional
+        opt : `dict` [`str`, `Any`], optional
             Options dictionary to use while searching.  All are optional.
 
             ``"curvals"``
@@ -155,6 +177,14 @@ class BpsConfig(Config):
                     (`dict`, optional)
             ``"default"``
                     Value to return if not found. (`Any`, optional)
+            ``"replaceEnvVars"``
+                    If search result is string, whether to replace environment
+                    variables inside it with special placeholder (<ENV:name>).
+                    By default set to False. (`bool`)
+            ``"expandEnvVars"``
+                    If search result is string, whether to replace environment
+                    variables inside it with current environment value.
+                    By default set to False. (`bool`)
             ``"replaceVars"``
                     If search result is string, whether to replace variables
                     inside it. By default set to True. (`bool`)
@@ -165,9 +195,9 @@ class BpsConfig(Config):
         Returns
         -------
         found : `bool`
-            Whether name was in config or not
-        value : `str`, `int`, `BpsConfig`, ...
-            Value from config if found
+            Whether name was in config or not.
+        value : `str`, `int`, `lsst.ctrl.bps.BpsConfig`, ...
+            Value from config if found.
         """
         _LOG.debug("search: initial key = '%s', opt = '%s'", key, opt)
 
@@ -207,7 +237,6 @@ class BpsConfig(Config):
                     if "curr_" + sect in curvals:
                         currkey = curvals["curr_" + sect]
                         _LOG.debug("currkey for section %s = %s", sect, currkey)
-                        # search_sect = Config.__getitem__(search_sect, currkey)
                         if Config.__contains__(search_sect, currkey):
                             search_sect = Config.__getitem__(search_sect, currkey)
 
@@ -242,10 +271,35 @@ class BpsConfig(Config):
         _LOG.debug("found=%s, value=%s", found, value)
 
         _LOG.debug("opt=%s %s", opt, type(opt))
-        if found and isinstance(value, str) and opt.get("replaceVars", True):
-            _LOG.debug("before format=%s", value)
-            value = expandvars(value)  # must replace env vars before calling format
-            value = self.formatter.format(value, self, opt)
+        if found and isinstance(value, str):
+            if opt.get("expandEnvVars", True):
+                _LOG.debug("before format=%s", value)
+                value = re.sub(r"<ENV:([^>]+)>", r"$\1", value)
+                value = expandvars(value)
+            elif opt.get("replaceEnvVars", False):
+                value = re.sub(r"\${([^}]+)}", r"<ENV:\1>", value)
+                value = re.sub(r"\$(\S+)", r"<ENV:\1>", value)
+
+            if opt.get("replaceVars", True):
+                # default only applies to original search key
+                # Instead of doing deep copies of opt (especially with
+                # the recursive calls), temporarily remove default value
+                # and put it back.
+                default = opt.pop("default", _NO_SEARCH_DEFAULT_VALUE)
+
+                # Temporarily replace any env vars so formatter doesn't try to
+                # replace them.
+                value = re.sub(r"\${([^}]+)}", r"<BPSTMP:\1>", value)
+
+                value = self.formatter.format(value, self, opt)
+
+                # Replace any temporary env place holders.
+                value = re.sub(r"<BPSTMP:([^>]+)>", r"${\1}", value)
+
+                # if default was originally in opt
+                if default != _NO_SEARCH_DEFAULT_VALUE:
+                    opt["default"] = default
+
             _LOG.debug("after format=%s", value)
 
         if found and isinstance(value, Config):

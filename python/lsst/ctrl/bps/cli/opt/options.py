@@ -18,19 +18,16 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-from ...submit import submit
+"""bps-specific command-line options.
+"""
 
+__all__ = ["extra_qgraph_option", "extra_init_option", "extra_run_quantum_option"]
 
-def _submit(config, workflow, **kwargs):
-    """Submit workflow for execution.
+from lsst.daf.butler.cli.utils import MWOptionDecorator
 
-    Parameters
-    ----------
-    config : `lsst.ctrl.bps.BpsConfig`
-        Configuration to use when submitting the workflow for execution.
-    workflow : `lsst.ctrl.bps.wms_workflow.BaseWmsWorkflow`
-        Representation of the abstract/scientific workflow specific to a given
-        workflow management system.
-    """
-    submit(config, workflow)
-    print(f"Run Id: {workflow.run_id}")
+extra_qgraph_option = MWOptionDecorator("--extra-qgraph-options",
+                                        help="String to pass through to QuantumGraph builder.")
+extra_init_option = MWOptionDecorator("--extra-init-options",
+                                      help="String to pass through to pipetaskInit execution.")
+extra_run_quantum_option = MWOptionDecorator("--extra-run-quantum-options",
+                                             help="String to pass through to Quantum execution.")
