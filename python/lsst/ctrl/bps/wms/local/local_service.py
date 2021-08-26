@@ -23,6 +23,7 @@
 #
 
 import os
+import sys
 import copy
 import time
 import logging
@@ -33,6 +34,7 @@ from lsst.daf.butler import Butler, DimensionUniverse, ButlerURI
 from lsst.pipe.base.graph import QuantumGraph
 
 _LOG = logging.getLogger(__name__)
+
 
 def get_job_id(name):
     try:
@@ -122,6 +124,28 @@ class LocalService(BaseWmsService):
                     else:
                         _LOG.info("No URI found")
 
+    def check_if_job_has_outputs(self, workflow, job_name):
+        """
+        Use the repo butler to determine if a job's outputs are present.
+        If any outputs are missing, return False.
+        Code stolen from Jim Chiang
+        """
+        butler = Butler(self.config['butlerConfig'], run=self.config['outCollection'])
+        registry = butler.registry
+        qgraph_file = workflow.local_jobs_input_files[job_name][0]
+        quantum_graph = QuantumGraph.loadUri(qgraph_file, DimensionUniverse())
+        _LOG.info(60 * "-")
+        _LOG.info('%s %s %s', job_name, qgraph_file, quantum_graph)
+        for node in quantum_graph:
+            for dataset_refs in node.quantum.outputs.values():
+                for dataset_ref in dataset_refs:
+                    ref = registry.findDataset(dataset_ref.datasetType,
+                                               dataset_ref.dataId,
+                                               collections=butler.run)
+                    if ref is None:
+                        return False
+        return True
+
     def check_wkf_inputs(self, workflow):
         """ Check input files in Butler
         Parameters
@@ -169,6 +193,8 @@ class LocalService(BaseWmsService):
         job_cmd
         """
         _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
+        _LOG.info("Job predecessors: %s", workflow.local_predecessors[job_id])
+        self.check_job_input(workflow, job_name)
         inputs_list_str = ""
         for one_input in workflow.local_jobs_input_files[job_name]:
             inputs_list_str = inputs_list_str + "%s " % one_input.strip("file:")[2:]
@@ -182,8 +208,11 @@ class LocalService(BaseWmsService):
         _LOG.info("\tRunning wrapper %s", pipe_wrapper)
         with subprocess.Popen(['./' + pipe_wrapper], stdout=subprocess.PIPE, shell=True) as proc:
             _LOG.info(proc.stdout.read())
+        # ask butler if job outputs are present to determine if job is successful
+        # Jim Chiang code
+        return self.check_if_job_has_outputs(workflow, job_name)
 
-    def submit(self, workflow, check_inputs=True, dry_run=True):
+    def submit(self, workflow, check_inputs=True, dry_run=False):
         """Submit a simple workflow locally
 
         Parameters
@@ -218,7 +247,11 @@ class LocalService(BaseWmsService):
                     job_name = workflow.local_jobs[job_id][0]
                     job_cmd = workflow.local_jobs[job_id][1]
                     _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
-                    self.run_one_job(workflow, job_id, job_name, job_cmd)
+                    success_code = self.run_one_job(workflow, job_id, job_name, job_cmd)
+                    _LOG.info("Return code for job %s is %d.", job_name, success_code)
+                    if not success_code:
+                        _LOG.error("%s failed, aborting.", job_name)
+                        sys.exit(1)
         else:
             _LOG.info("Smart job sequence")
             _LOG.info(workflow.local_smart_job_sequence)
