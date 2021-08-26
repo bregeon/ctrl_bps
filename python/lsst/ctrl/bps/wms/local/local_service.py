@@ -28,6 +28,7 @@ import copy
 import time
 import logging
 import subprocess
+import re
 
 from lsst.ctrl.bps.wms_service import BaseWmsWorkflow, BaseWmsService
 from lsst.daf.butler import Butler, DimensionUniverse, ButlerURI
@@ -43,6 +44,13 @@ def get_job_id(name):
         job_id = 0
     return job_id
 
+def get_cmdline(gwf_job):
+    """Command line for a GenericWorkflowJob."""
+    cmd = ' '.join((gwf_job.executable.src_uri, gwf_job.arguments))
+    newcmd = cmd
+    for key in re.findall(r"<ENV:([^>]+)>", cmd):
+        newcmd = newcmd.replace(rf"<ENV:{key}>", "${%s}" % key)
+    return newcmd
 
 class LocalService(BaseWmsService):
     """Local version of WMS service
@@ -194,7 +202,7 @@ class LocalService(BaseWmsService):
         """
         _LOG.info("Running Job %d is %s \n %s", job_id, job_name, job_cmd)
         _LOG.info("Job predecessors: %s", workflow.local_predecessors[job_id])
-        self.check_job_input(workflow, job_name)
+        # self.check_job_input(workflow, job_name)
         inputs_list_str = ""
         for one_input in workflow.local_jobs_input_files[job_name]:
             inputs_list_str = inputs_list_str + "%s " % one_input.strip("file:")[2:]
@@ -212,7 +220,7 @@ class LocalService(BaseWmsService):
         # Jim Chiang code
         return self.check_if_job_has_outputs(workflow, job_name)
 
-    def submit(self, workflow, check_inputs=True, dry_run=False):
+    def submit(self, workflow, check_inputs=False, dry_run=False):
         """Submit a simple workflow locally
 
         Parameters
@@ -345,7 +353,7 @@ class LocalBpsWmsWorkflow(BaseWmsWorkflow):
             except:
                 job_id = 0
             local_workflow.local_ordered_job_ids.append(job_id)
-            local_workflow.local_jobs[job_id] = (gwf_job.name, gwf_job.cmdline)
+            local_workflow.local_jobs[job_id] = (gwf_job.name, get_cmdline(gwf_job))
             local_workflow.local_jobs_input_files[job_name] = gwf_job_inputs
             local_workflow.local_jobs_output_files[job_name] = gwf_job_outputs
 
